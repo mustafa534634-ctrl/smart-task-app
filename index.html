@@ -157,7 +157,7 @@ body.light-mode .nav button.active{background:#eee9fb;border-color:#d5c9f5;color
 <section class="section" id="completed"><div class="panel"><div class="panel-head"><div><h2 class="panel-title">Completed tasks</h2><div class="panel-sub">Every completed task is progress worth celebrating.</div></div><span class="chip" id="completedChip">0 completed</span></div><div class="task-list" id="completedList"></div></div></section>
 <section class="section" id="workspaces">
 <div class="panel" style="max-width:900px"><div class="panel-head"><div><h2 class="panel-title">Business workspaces</h2><div class="panel-sub">Create a workspace, then manage shared tasks with descriptions, priorities, due dates and completion status.</div></div></div>
-<div class="tip" style="margin-bottom:18px"><b>Team workspace</b>Each workspace below has its own shared task list. Admins can manage workspace tasks and members. Members can view, create and update tasks. Overdue tasks are marked when you open the app. Test with non-confidential data first.</div>
+<div class="tip" style="margin-bottom:18px"><b>Team workspace</b>Each workspace below has its own shared task list. The SmartTask administrator and each workspace owner can manage shared tasks. Members can view shared tasks and post comments, but cannot create, edit, complete, or delete workspace tasks. Overdue tasks are marked when you open the app. Test with non-confidential data first.</div>
 <form id="workspaceForm"><div class="field"><label for="workspaceName">Workspace title</label><input class="control" id="workspaceName" maxlength="100" required placeholder="e.g. Bright Studio"></div><button class="btn" type="submit">＋ Create workspace</button></form>
 <div style="height:1px;background:var(--line);margin:22px 0"></div><h3 class="panel-title" style="margin-bottom:12px">Your workspaces</h3><div id="workspaceList" class="task-list"><div class="empty">Sign in to load your workspaces.</div></div><p class="hint" style="margin-top:12px">Workspace IDs alone do not grant access. Only invite people you trust.</p>
 <div style="height:1px;background:var(--line);margin:22px 0"></div>
@@ -166,7 +166,7 @@ body.light-mode .nav button.active{background:#eee9fb;border-color:#d5c9f5;color
 <form id="inviteForm"><div class="form-grid">
 <div class="field span-2"><label for="inviteWorkspace">Workspace</label><select class="control" id="inviteWorkspace" required><option value="">Choose a workspace</option></select></div>
 <div class="field span-2"><label for="inviteEmail">Member's account email</label><input class="control" id="inviteEmail" type="email" maxlength="254" required placeholder="member@example.com"></div>
-<div class="field"><label for="inviteRole">Role</label><select class="control" id="inviteRole"><option value="member">Member</option><option value="admin">Admin</option></select><span class="hint">Admins have full access to manage tasks and members. Members can only view, create, and update tasks.</span></div>
+<div class="field"><label for="inviteRole">Role</label><select class="control" id="inviteRole"><option value="member">Member</option><option value="admin">Admin</option></select><span class="hint">The SmartTask administrator and workspace owner can manage shared tasks. Members can view and comment only.</span></div>
 </div><div class="form-actions"><button class="btn" type="submit" id="sendInviteBtn">Create invitation</button></div></form>
 <div id="inviteResult" class="tip" style="display:none;margin-top:12px"></div>
 <h3 class="panel-title" style="margin:22px 0 12px">Pending invitations</h3><div id="invitationList" class="task-list"><div class="empty">Sign in to view invitations.</div></div>
@@ -202,7 +202,7 @@ body.light-mode .nav button.active{background:#eee9fb;border-color:#d5c9f5;color
 
       <section>
         <h3>1. Data Collection &amp; Sovereignty</h3>
-        <p>SmartTask operates on a serverless, client-side framework. We do not own, store, or harvest any personal data, tasks, or user credentials on external corporate servers. All workspace configurations, member profiles, and task records are transmitted directly and securely between your browser and your private database infrastructure.</p>
+        <p>SmartTask stores account, workspace, task, invitation, and comment data in the Supabase cloud project configured for this app. Authentication is handled by Supabase. Data access depends on the database Row Level Security (RLS) policies and server-side functions configured for the project. Do not enter sensitive information unless the workspace owner has approved the project's security and privacy settings.</p>
       </section>
 
       <section>
@@ -214,7 +214,7 @@ body.light-mode .nav button.active{background:#eee9fb;border-color:#d5c9f5;color
         <h3>3. Third-Party Service Providers</h3>
         <p>The application utilizes industry-standard cloud providers to orchestrate seamless task tracking:</p>
         <p>• Supabase: Used for private data architecture and secure user authentication.</p>
-        <p>• EmailJS: Executed entirely from the front-end to safely dispatch workspace invitations.</p>
+        <p>• EmailJS: Used by the app to send workspace invitation and comment-notification emails. Email delivery depends on the configured EmailJS service, template, account limits, and recipient settings.</p>
         <p>All telemetry and data interactions are governed by the respective security protocols of these platforms.</p>
       </section>
 
@@ -622,10 +622,15 @@ document.addEventListener('submit',async e=>{
   const panel=document.querySelector(`[data-comments-panel="${CSS.escape(taskId)}"]`);
   if(panel)panel.dataset.loaded='1';
   const workspace=workspaceCache.find(w=>w.id===task.workspaceId);
+  if(task.workspaceId){
+   const {error:activityError}=await supabaseClient.from('activity_logs').insert({workspace_id:task.workspaceId,user_id:currentUser.id,user_email:currentUser.email||'',action_text:`Commented on task \"${task.title}\"`});
+   if(activityError){console.error('Comment activity log failed:',activityError);notify('Comment saved, but the workspace activity notification could not be recorded: '+activityError.message);}
+   else if(workspace?.owner_id&&workspace.owner_id!==currentUser.id){await onWorkspaceChange(task.workspaceId);}
+  }
   if(task.workspaceId&&workspace?.owner_id&&workspace.owner_id!==currentUser.id){
    await sendCommentEmailNotification(task,commentText);
   }
-  notify('Comment posted.');
+  notify('Comment posted. The workspace activity log was updated.');
  }catch(err){notify('Comment could not be posted: '+(err.message||'Unknown error'))}
  finally{submit.disabled=false}
 });
@@ -678,7 +683,7 @@ async function sendTaskAssignmentEmail(task, workspaceName){
  }
 }
 
-$('taskForm').addEventListener('submit',async e=>{e.preventDefault();const title=$('title').value.trim();if(!title){$('title').setCustomValidity('Please enter a task title.');$('title').reportValidity();$('title').setCustomValidity('');return}const due=$('dueDate').value;if(due&&!/^\d{4}-\d{2}-\d{2}$/.test(due)){notify('Please choose a valid due date.');return}const id=$('editId').value;const previousTask=id?tasks.find(t=>t.id===id):null;if(id&&previousTask?.workspaceId&&!canEditWorkspaceTasks(previousTask.workspaceId)){notify('Only the workspace owner can edit this shared task.');return}const previousAssignee=previousTask?.assigneeId||'';const chosenWorkspaceId=$('taskWorkspace').value||'';if(chosenWorkspaceId&&!businessAccess){notify('Business subscription approval is required for shared tasks.');return}if(chosenWorkspaceId&&!isWorkspaceMember(chosenWorkspaceId)){notify('You need workspace membership to add or edit shared tasks.');return}const taskAssignee=$('assignee').value;const data={title,description:$('description').value.trim(),category:$('category').value,priority:$('priority').value,dueDate:due,workspaceId:chosenWorkspaceId,assigneeId:taskAssignee||'',assigned_to:!taskAssignee?null:taskAssignee,createdBy:currentUser?.id||'',updatedAt:new Date().toISOString()};if(id){tasks=tasks.map(t=>t.id===id?{...t,...data}:t);logActivity(`${currentUser?.email||'User'} updated task: ${title}`);notify('Changes saved successfully.')}else{tasks.unshift({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),...data,completed:false,createdAt:new Date().toISOString()});logActivity(`${currentUser?.email||'User'} created task: ${title}`);notify('Task added successfully.')}persist();
+$('taskForm').addEventListener('submit',async e=>{e.preventDefault();const title=$('title').value.trim();if(!title){$('title').setCustomValidity('Please enter a task title.');$('title').reportValidity();$('title').setCustomValidity('');return}const due=$('dueDate').value;if(due&&!/^\d{4}-\d{2}-\d{2}$/.test(due)){notify('Please choose a valid due date.');return}const id=$('editId').value;const previousTask=id?tasks.find(t=>t.id===id):null;if(id&&previousTask?.workspaceId&&!canEditWorkspaceTasks(previousTask.workspaceId)){notify('Only the SmartTask admin or workspace owner can edit this shared task.');return}const previousAssignee=previousTask?.assigneeId||'';const chosenWorkspaceId=$('taskWorkspace').value||'';if(chosenWorkspaceId&&!businessAccess){notify('Business subscription approval is required for shared tasks.');return}if(chosenWorkspaceId&&!isWorkspaceMember(chosenWorkspaceId)){notify('You need workspace membership to add or edit shared tasks.');return}if(chosenWorkspaceId&&!isWorkspaceOwner(chosenWorkspaceId)){notify('Members can view and comment on shared tasks, but only the SmartTask administrator or workspace owner can create or manage them.');return}const taskAssignee=$('assignee').value;const data={title,description:$('description').value.trim(),category:$('category').value,priority:$('priority').value,dueDate:due,workspaceId:chosenWorkspaceId,assigneeId:taskAssignee||'',assigned_to:!taskAssignee?null:taskAssignee,createdBy:currentUser?.id||'',updatedAt:new Date().toISOString()};if(id){tasks=tasks.map(t=>t.id===id?{...t,...data}:t);logActivity(`${currentUser?.email||'User'} updated task: ${title}`);notify('Changes saved successfully.')}else{tasks.unshift({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),...data,completed:false,createdAt:new Date().toISOString()});logActivity(`${currentUser?.email||'User'} created task: ${title}`);notify('Task added successfully.')}persist();
 if(!id&&chosenWorkspaceId&&chosenWorkspaceId!=='personal'&&supabaseClient&&currentUser){
  const {error:activityError}=await supabaseClient.from('activity_logs').insert({workspace_id:chosenWorkspaceId,user_id:currentUser.id,user_email:currentUser.email||'',action_text:`Created task "${title}"`});
  if(activityError)notify('Task saved, but activity log failed: '+activityError.message);
