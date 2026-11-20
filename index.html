@@ -221,7 +221,7 @@ body.light-mode .nav button.active{background:#eee9fb;border-color:#d5c9f5;color
         <h3>3. Third-Party Service Providers</h3>
         <p>The application utilizes industry-standard cloud providers to orchestrate seamless task tracking:</p>
         <p>• Supabase: Used for private data architecture and secure user authentication.</p>
-        <p>• EmailJS: Used by the app to send workspace invitation and comment-notification emails. Email delivery depends on the configured EmailJS service, template, account limits, and recipient settings.</p>
+        <p>• EmailJS: Used by the app to send workspace invitation emails. Email delivery depends on the configured EmailJS service, template, account limits, and recipient settings.</p>
         <p>All telemetry and data interactions are governed by the respective security protocols of these platforms.</p>
       </section>
 
@@ -443,10 +443,25 @@ async function onWorkspaceChange(selectedWorkspaceId){
  await loadAssignees();
  if(!supabaseClient||!logsList)return;
  const {data:logs,error:logError}=await supabaseClient.from('activity_logs').select('*').eq('workspace_id',selectedWorkspaceId).order('created_at',{ascending:false});
- if(!logError&&logs&&logs.length){
-  logsList.innerHTML=logs.map(l=>`<li style="padding:5px 0;border-bottom:1px solid var(--line)"><b>${esc(l.user_email||'User')}</b>: ${esc(l.action_text||'Activity')}</li>`).join('');
+ const workspaceTaskIds=tasks.filter(t=>String(t.workspaceId)===String(selectedWorkspaceId)).map(t=>String(t.id));
+ let workspaceComments=[];
+ let commentError=null;
+ if(workspaceTaskIds.length){
+  const result=await supabaseClient.from('task_comments').select('id,task_id,user_email,comment_text,created_at').in('task_id',workspaceTaskIds).order('created_at',{ascending:false});
+  workspaceComments=result.data||[];
+  commentError=result.error;
+ }
+ const activityItems=(logs||[]).map(l=>({created_at:l.created_at,user_email:l.user_email||'User',text:l.action_text||'Activity'}));
+ for(const c of workspaceComments){
+  const linkedTask=tasks.find(t=>String(t.id)===String(c.task_id));
+  activityItems.push({created_at:c.created_at,user_email:c.user_email||'Team member',text:`Comment on "${linkedTask?.title||'workspace task'}": ${c.comment_text||''}`});
+ }
+ activityItems.sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+ if(activityItems.length){
+  logsList.innerHTML=activityItems.map(a=>`<li style="padding:5px 0;border-bottom:1px solid var(--line)"><b>${esc(a.user_email)}</b>: ${esc(a.text)}</li>`).join('');
+  if(commentError)console.warn('Workspace comments could not be loaded:',commentError.message);
  }else{
-  logsList.innerHTML='<li style="color:gray">Is workspace mein koi activity nahi hui.</li>';
+  logsList.innerHTML=commentError?`<li style="color:gray">Comments/activity could not be loaded: ${esc(commentError.message)}</li>`:'<li style="color:gray">Is workspace mein koi activity ya comment nahi hua.</li>';
  }
 }
 $('taskWorkspace').addEventListener('change',e=>onWorkspaceChange(e.target.value||'personal'));
@@ -616,8 +631,13 @@ document.addEventListener('submit',async e=>{
   }
   if(task.workspaceId){
    await onWorkspaceChange(task.workspaceId);
+   const workspaceCard=[...document.querySelectorAll('#workspaceList .task')].find(card=>card.textContent.includes(task.title));
+   if(workspaceCard){
+    const commentList=workspaceCard.querySelector(`[data-comments-list="${CSS.escape(taskId)}"]`);
+    if(commentList)await loadTaskComments(taskId);
+   }
   }
-  notify('Comment posted. It is now recorded in this workspace activity log and in the task comments.');
+  notify('Comment posted. It is now visible in this workspace activity and task comments.');
  }catch(err){notify('Comment could not be posted: '+(err.message||'Unknown error'))}
  finally{submit.disabled=false}
 });
@@ -684,7 +704,7 @@ if(data.workspaceId && data.assigneeId && (!id || previousAssignee!==data.assign
 resetForm();page('dashboard');if(data.workspaceId)await loadWorkspaces()});
 $('cancelEdit').addEventListener('click',()=>{resetForm();page('dashboard')});
 $('workspaceForm').addEventListener('submit',async e=>{e.preventDefault();if(!ownerPaymentAccess){notify('Only the company owner with an approved annual payment can create a company workspace.');return}const name=$('workspaceName').value.trim();if(!name)return;if(!supabaseClient||!currentUser){notify('Please sign in first.');return}const btn=e.submitter;btn.disabled=true;try{const {data,error}=await supabaseClient.from('workspaces').insert({name,owner_id:currentUser.id}).select('id,name,owner_id,created_at').single();if(error)throw error;const {error:memberError}=await supabaseClient.from('workspace_members').upsert({workspace_id:data.id,user_id:currentUser.id,role:'owner'},{onConflict:'workspace_id,user_id'});if(memberError){notify('Workspace created, but owner membership failed: '+memberError.message+' Ask the admin to add the owner membership.');}else notify('Workspace created and owner membership added.');$('workspaceName').value='';await loadWorkspaces()}catch(err){notify('Workspace create failed: '+err.message)}finally{btn.disabled=false}});
-document.addEventListener('click',e=>{const b=e.target.closest('[data-add-workspace-task]');if(!b)return;resetForm();$('taskWorkspace').value=b.dataset.addWorkspaceTask;$('formHeading').textContent='Create a shared workspace task';$('saveBtn').textContent='＋ Save shared task';page('add');$('title').focus()});
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-add-workspace-task]');if(!b)return;resetForm();$('taskWorkspace').value=b.dataset.addWorkspaceTask;await loadAssignees();$('formHeading').textContent='Create a shared workspace task';$('saveBtn').textContent='＋ Save shared task';page('add');$('title').focus()});
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-copy-workspace]');if(!b)return;try{await navigator.clipboard.writeText(b.dataset.copyWorkspace);notify('Workspace ID copied.')}catch(err){prompt('Copy this workspace ID:',b.dataset.copyWorkspace)}});
 document.addEventListener('click',async e=>{const rename=e.target.closest('[data-rename-workspace]');const del=e.target.closest('[data-delete-workspace]');if(!rename&&!del)return;if(!supabaseClient||!currentUser)return;const id=(rename||del).dataset[rename?'renameWorkspace':'deleteWorkspace'];const w=workspaceCache.find(x=>x.id===id);if(!w||!isWorkspaceAdmin(id)){notify('Only workspace admins can manage this workspace.');return}if(rename){const name=prompt('Enter the new workspace name:',rename.dataset.name||w.name);if(name===null)return;if(!name.trim()){notify('Workspace name cannot be empty.');return}const {error}=await supabaseClient.from('workspaces').update({name:name.trim()}).eq('id',id).eq('owner_id',currentUser.id);if(error){notify('Rename failed: '+error.message);return}notify('Workspace renamed.');await loadWorkspaces();return}if(!confirm('Delete workspace “'+(del.dataset.name||w.name)+'”? This is allowed only if it has no tasks.'))return;const {data:linked,error:checkError}=await supabaseClient.from('Tasks').select('id').eq('workspace_id',id).limit(1);if(checkError){notify('Could not check workspace tasks: '+checkError.message);return}if(linked&&linked.length){notify('This workspace has tasks. Move or delete its tasks first; workspace was not deleted.');return}const {error}=await supabaseClient.from('workspaces').delete().eq('id',id).eq('owner_id',currentUser.id);if(error){notify('Delete failed: '+error.message);return}notify('Empty workspace deleted.');await loadWorkspaces()});
 ['search','filterCategory','filterPriority','filterStatus'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));
