@@ -6,7 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#11152b">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="SmartTask">
@@ -566,39 +568,8 @@ async function loadTaskComments(taskId){
  list.innerHTML=data.map(c=>`<article class="comment-item"><div class="comment-meta"><strong>${esc(c.user_email||'Team member')}</strong><span>${esc(new Date(c.created_at).toLocaleString())}</span></div><div class="comment-text">${esc(c.comment_text)}</div></article>`).join('');
 }
 
-async function sendCommentEmailNotification(task, commentText){
- let recipientEmail='', status='failed', errorText='';
- try{
-  const workspace=workspaceCache.find(w=>w.id===task.workspaceId);
-  const ownerId=workspace?.owner_id;
-  if(!ownerId)throw new Error('Workspace owner could not be identified for this task.');
-  if(ownerId===currentUser?.id){status='skipped';errorText='Comment author is the workspace owner.';}
-  else{
-   const {data:profile,error:profileError}=await supabaseClient.from('profiles').select('email,full_name').eq('id',ownerId).maybeSingle();
-   if(profileError)throw profileError;
-   recipientEmail=String(profile?.email||'').trim();
-   if(!recipientEmail)throw new Error('Workspace owner email was not found in profiles.');
-   if(!window.emailjs)throw new Error('EmailJS library did not load.');
-   if([COMMENT_EMAILJS_SERVICE_ID,COMMENT_EMAILJS_TEMPLATE_ID,COMMENT_EMAILJS_PUBLIC_KEY].some(v=>!v||v.startsWith('YOUR_')))throw new Error('Comment EmailJS settings are not configured.');
-   await window.emailjs.send(COMMENT_EMAILJS_SERVICE_ID,COMMENT_EMAILJS_TEMPLATE_ID,{
-    to_email:recipientEmail,
-    name:'SmartTask',
-    email:currentUser?.email||'',
-    subject:`New member comment on task: ${task.title}`,
-    task_title:task.title,
-    invitation_id:'',
-    workspace_name:workspace?.name||'SmartTask workspace',
-    message:`${currentUser?.email||'A team member'} commented on "${task.title}": ${commentText}`
-   },{publicKey:COMMENT_EMAILJS_PUBLIC_KEY});
-   status='sent';
-  }
- }catch(err){errorText=err?.text||err?.message||String(err);console.error('Task comment email notification failed:',err);}
- try{
-  const {error:logError}=await supabaseClient.from('email_notifications').insert({recipient_email:recipientEmail||'',subject:`SmartTask comment: ${task.title}`,message:commentText,status});
-  if(logError)console.error('Could not save email notification log:',logError);
- }catch(logErr){console.error('Email notification log failed:',logErr)}
- if(status==='failed')notify('Comment saved, but owner email notification failed: '+errorText);
-}
+// Comments are stored in task_comments and mirrored to the matching workspace activity log.
+
 document.addEventListener('click',async e=>{
  const button=e.target.closest('[data-comments-toggle]');
  if(!button)return;
@@ -639,7 +610,7 @@ document.addEventListener('submit',async e=>{
   if(panel)panel.dataset.loaded='1';
   const workspace=workspaceCache.find(w=>w.id===task.workspaceId);
   if(task.workspaceId){
-   const {error:activityError}=await supabaseClient.from('activity_logs').insert({workspace_id:task.workspaceId,user_id:currentUser.id,user_email:currentUser.email||'',action_text:`Comment on task \"${task.title}\": ${commentText}`});
+   const {error:activityError}=await supabaseClient.from('activity_logs').insert({workspace_id:task.workspaceId,user_id:currentUser.id,user_email:currentUser.email||'',action_text:`New comment on task \"${task.title}\": ${commentText}`});
    if(activityError){console.error('Comment activity log failed:',activityError);notify('Comment saved, but the workspace activity notification could not be recorded: '+activityError.message);}
    else if(workspace?.owner_id&&workspace.owner_id!==currentUser.id){await onWorkspaceChange(task.workspaceId);}
   }
@@ -661,7 +632,7 @@ function filtered(){const q=$('search').value.trim().toLowerCase(),cat=$('filter
 function render(){const done=tasks.filter(t=>t.completed).length,pending=tasks.length-done,overdue=tasks.filter(t=>!t.completed&&t.dueDate&&t.dueDate<today()).length,pct=tasks.length?Math.round(done/tasks.length*100):0;
 $('total').textContent=tasks.length;$('doneCount').textContent=done;$('pending').textContent=pending;$('percent').textContent=pct+'%';$('ringPct').textContent=pct+'%';$('ring').style.setProperty('--p',pct+'%');$('progressNote').textContent=tasks.length?(pct===100?'All done — fantastic work!':`${done} of ${tasks.length} tasks completed.`):'Add your first task to get started.';$('legendDone').textContent=done;$('legendPending').textContent=pending;$('legendOverdue').textContent=overdue;$('completedChip').textContent=`${done} completed`;
 const list=filtered();$('taskList').innerHTML=list.length?list.map(taskHTML).join(''):empty('Nothing to show just yet','Try changing your filters, or add a new task.');const finished=tasks.filter(t=>t.completed);$('completedList').innerHTML=finished.length?finished.sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||'')).map(taskHTML).join(''):empty('No completed tasks yet','Check off a task when you finish it.');document.querySelectorAll('.task').forEach(el=>{el.style.padding=prefs.compact?'9px 11px':''})}
-function page(id){if(id==='settings'&&String(currentUser?.email||'').trim().toLowerCase()!==ADMIN_EMAIL){id='dashboard'}if(id==='workspaces'&&!businessAccess){id='billing';$('paymentStatus').textContent='Submit your annual payment receipt and wait for admin approval to unlock Business/Team features. Your Personal Tasks will not be affected.'}document.querySelectorAll('.section').forEach(s=>s.classList.toggle('active',s.id===id));if('serviceWorker' in navigator && location.protocol.startsWith('http'))window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(err=>console.warn('PWA service worker:',err)));
+function page(id){if(id==='settings'&&String(currentUser?.email||'').trim().toLowerCase()!==ADMIN_EMAIL){id='dashboard'}if(id==='workspaces'&&!businessAccess){id='billing';$('paymentStatus').textContent='Submit your annual payment receipt and wait for admin approval to unlock Business/Team features. Your Personal Tasks will not be affected.'}document.querySelectorAll('.section').forEach(s=>s.classList.toggle('active',s.id===id));
 document.querySelectorAll('[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===id));const info={dashboard:['Your day, in focus.','A little progress each day adds up.'],add:[$('editId').value?'Edit your task':'Create a task','Capture the details now, so you can focus later.'],completed:['Look what you’ve done.','Every finished task is a win.'],settings:['Your preferences','Make your workspace feel right for you.'],billing:['SmartTask Business Plan','Annual subscription and payment approval.'],workspaces:['Business workspaces','Create and review business workspaces.']}[id];$('pageTitle').textContent=info[0];$('pageSub').textContent=info[1];window.scrollTo({top:0,behavior:'smooth'})}
 function resetForm(){ $('taskForm').reset();$('editId').value='';$('formHeading').textContent='Create a new task';$('saveBtn').textContent='＋ Save task';$('cancelEdit').hidden=true}
 function editTask(t){$('editId').value=t.id;$('title').value=t.title;$('description').value=t.description||'';$('category').value=t.category;$('priority').value=t.priority;$('dueDate').value=t.dueDate||'';$('taskWorkspace').value=t.workspaceId||'';loadAssignees().then(()=>{$('assignee').value=t.assigneeId||''});$('formHeading').textContent='Edit task';$('saveBtn').textContent='Save changes';$('cancelEdit').hidden=false;page('add');$('title').focus()}
@@ -756,20 +727,11 @@ function googleTranslateElementInit(){
 <script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 
 <script>
-/* SmartTask PWA registration: /sw.js must be deployed beside index.html. */
+/* SmartTask PWA registration */
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/sw.js').catch(function (error) {
-      console.warn('SmartTask offline support could not be enabled:', error);
-    });
-  });
-}
-</script>
-<script>
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/sw.js')
-      .catch(function (err) { console.warn('SmartTask PWA registration failed:', err); });
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      .catch(function (error) { console.warn('SmartTask service worker registration failed:', error); });
   });
 }
 </script>
